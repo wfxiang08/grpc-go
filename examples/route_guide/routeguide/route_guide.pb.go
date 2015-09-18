@@ -310,15 +310,21 @@ func RegisterRouteGuideServer(s *grpc.Server, srv RouteGuideServer) {
 	s.RegisterService(&_RouteGuide_serviceDesc, srv)
 }
 
+// Service Handler具体做啥了?
 func _RouteGuide_GetFeature_Handler(srv interface{}, ctx context.Context, codec grpc.Codec, buf []byte) (interface{}, error) {
+	// 对于Unary RPC, 首先从buf中 unmarshal 出输入的参数
 	in := new(Point)
 	if err := codec.Unmarshal(buf, in); err != nil {
 		return nil, err
 	}
+
+	// Handler只是封装，具体的函数调用还得回到 Server
 	out, err := srv.(RouteGuideServer).GetFeature(ctx, in)
 	if err != nil {
 		return nil, err
 	}
+
+	// 返回结果
 	return out, nil
 }
 

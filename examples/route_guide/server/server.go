@@ -104,8 +104,11 @@ func (s *routeGuideServer) RecordRoute(stream pb.RouteGuide_RecordRouteServer) e
 	var lastPoint *pb.Point
 	startTime := time.Now()
 	for {
+		// 接口中如何定义Stream呢?
 		point, err := stream.Recv()
+		// 不断接受数据，知道遇到EOF, 或者其他的错误
 		if err == io.EOF {
+			// EOF: 结束请求，返回数据
 			endTime := time.Now()
 			return stream.SendAndClose(&pb.RouteSummary{
 				PointCount:   pointCount,
@@ -134,6 +137,7 @@ func (s *routeGuideServer) RecordRoute(stream pb.RouteGuide_RecordRouteServer) e
 // previous messages at each of those locations.
 func (s *routeGuideServer) RouteChat(stream pb.RouteGuide_RouteChatServer) error {
 	for {
+		// 接受
 		in, err := stream.Recv()
 		if err == io.EOF {
 			return nil
@@ -147,6 +151,7 @@ func (s *routeGuideServer) RouteChat(stream pb.RouteGuide_RouteChatServer) error
 		} else {
 			s.routeNotes[key] = append(s.routeNotes[key], in)
 		}
+		// 返回
 		for _, note := range s.routeNotes[key] {
 			if err := stream.Send(note); err != nil {
 				return err
@@ -179,6 +184,7 @@ func calcDistance(p1 *pb.Point, p2 *pb.Point) int32 {
 	lat2 := float64(p2.Latitude) / CordFactor
 	lng1 := float64(p1.Longitude) / CordFactor
 	lng2 := float64(p2.Longitude) / CordFactor
+	// 太牛逼的变量名
 	φ1 := toRadians(lat1)
 	φ2 := toRadians(lat2)
 	Δφ := toRadians(lat2 - lat1)
@@ -225,6 +231,8 @@ func main() {
 	if err != nil {
 		grpclog.Fatalf("failed to listen: %v", err)
 	}
+
+	// 暂不考虑: tls, 不过是一个非常有意思的话题
 	var opts []grpc.ServerOption
 	if *tls {
 		creds, err := credentials.NewServerTLSFromFile(*certFile, *keyFile)
@@ -233,6 +241,8 @@ func main() {
 		}
 		opts = []grpc.ServerOption{grpc.Creds(creds)}
 	}
+
+	// 创建一个Server/注册一个Handler, Listener
 	grpcServer := grpc.NewServer(opts...)
 	pb.RegisterRouteGuideServer(grpcServer, newServer())
 	grpcServer.Serve(lis)

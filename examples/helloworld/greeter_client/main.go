@@ -37,9 +37,9 @@ import (
 	"log"
 	"os"
 
-	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	pb "google.golang.org/grpc/examples/helloworld/helloworld"
 )
 
 const (
@@ -65,5 +65,5 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not greet: %v", err)
 	}
-	log.Printf("Greeting: %s", r.Message)
+	log.Printf("Nae: %s --> Greeting: %s", name, r.Message)
 }

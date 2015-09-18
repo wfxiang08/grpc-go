@@ -74,6 +74,9 @@ func printFeatures(client pb.RouteGuideClient, rect *pb.Rectangle) {
 	if err != nil {
 		grpclog.Fatalf("%v.ListFeatures(_) = _, %v", client, err)
 	}
+
+	// 利用返回的Stream来遍历数据
+	// stream Feature ---> RouteGuide_ListFeaturesClient
 	for {
 		feature, err := stream.Recv()
 		if err == io.EOF {
@@ -90,16 +93,22 @@ func printFeatures(client pb.RouteGuideClient, rect *pb.Rectangle) {
 func runRecordRoute(client pb.RouteGuideClient) {
 	// Create a random number of random points
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	// 1. 创建一定数量的点
 	pointCount := int(r.Int31n(100)) + 2 // Traverse at least two points
 	var points []*pb.Point
 	for i := 0; i < pointCount; i++ {
 		points = append(points, randomPoint(r))
 	}
 	grpclog.Printf("Traversing %d points.", len(points))
+
+	// 数据如何以stream的方式输入
 	stream, err := client.RecordRoute(context.Background())
 	if err != nil {
 		grpclog.Fatalf("%v.RecordRoute(_) = _, %v", client, err)
 	}
+
+	// 通过stream来发送
 	for _, point := range points {
 		if err := stream.Send(point); err != nil {
 			grpclog.Fatalf("%v.Send(%v) = %v", stream, point, err)
@@ -178,11 +187,16 @@ func main() {
 	} else {
 		opts = append(opts, grpc.WithInsecure())
 	}
+
+	// 1. 创建Conn
 	conn, err := grpc.Dial(*serverAddr, opts...)
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)
 	}
 	defer conn.Close()
+
+	// 2. 创建Client
+	//    和Thrift相比，就不存在protocol之说了，序列化只有一个方案
 	client := pb.NewRouteGuideClient(conn)
 
 	// Looking for a valid feature

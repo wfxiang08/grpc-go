@@ -60,6 +60,8 @@ type MethodDesc struct {
 }
 
 // ServiceDesc represents an RPC service's specification.
+// 如何描述一个服务呢?
+// 服务名， Handler, Methods等信息
 type ServiceDesc struct {
 	ServiceName string
 	// The pointer to the service interface. Used to check whether the user
@@ -139,21 +141,30 @@ func NewServer(opt ...ServerOption) *Server {
 // RegisterService register a service and its implementation to the gRPC
 // server. Called from the IDL generated code. This must be called before
 // invoking Serve.
+//
+// sd 和 ss 都是根据 proto文件自动生成的
+// sd 提供了各种方法的描述，其实和 thrift的 process_xxx 相似，负责参数的读取，返回，以及processor/server方法的调用的封装
+//
 func (s *Server) RegisterService(sd *ServiceDesc, ss interface{}) {
 	ht := reflect.TypeOf(sd.HandlerType).Elem()
 	st := reflect.TypeOf(ss)
+
+	// 服务描述 & 实现
 	if !st.Implements(ht) {
 		grpclog.Fatalf("grpc: Server.RegisterService found the handler of type %v that does not satisfy %v", st, ht)
 	}
 	s.register(sd, ss)
 }
 
+// ss: 实现的Server
 func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.m[sd.ServiceName]; ok {
 		grpclog.Fatalf("grpc: Server.RegisterService found duplicate service registration for %q", sd.ServiceName)
 	}
+
+	// 注册服务: 在当前的Server上注册服务，和Thrift的processMap类似
 	srv := &service{
 		server: ss,
 		md:     make(map[string]*MethodDesc),
@@ -181,6 +192,7 @@ var (
 // read gRPC request and then call the registered handlers to reply to them.
 // Service returns when lis.Accept fails.
 func (s *Server) Serve(lis net.Listener) error {
+	// 1. 记录各种 lis 的状态
 	s.mu.Lock()
 	if s.lis == nil {
 		s.mu.Unlock()
@@ -188,17 +200,24 @@ func (s *Server) Serve(lis net.Listener) error {
 	}
 	s.lis[lis] = true
 	s.mu.Unlock()
+
+	// 2. 关闭当前的lis, 并且取消注册
 	defer func() {
 		lis.Close()
 		s.mu.Lock()
 		delete(s.lis, lis)
 		s.mu.Unlock()
 	}()
+
+	// 3.
 	for {
+		// 3.1 等待 接受请求
 		c, err := lis.Accept()
 		if err != nil {
 			return err
 		}
+
+		// 3.2 得到一个请求之后，首先和对应的Conn进行授权认证
 		var authInfo credentials.AuthInfo
 		if creds, ok := s.opts.creds.(credentials.TransportAuthenticator); ok {
 			c, authInfo, err = creds.ServerHandshake(c)
@@ -207,6 +226,10 @@ func (s *Server) Serve(lis net.Listener) error {
 				continue
 			}
 		}
+
+		// 3.3 封装Transport(就是在socket的基础上添加授权, https/spdy等协议)
+		//     虽然复杂，但应该是用户透明的
+		//     也可以考虑简单的模型
 		s.mu.Lock()
 		if s.conns == nil {
 			s.mu.Unlock()
@@ -223,10 +246,15 @@ func (s *Server) Serve(lis net.Listener) error {
 		s.conns[st] = true
 		s.mu.Unlock()
 
+		// 3.4 以上的登记注册工作完毕，现在开始正式的工作
 		go func() {
+			// transport就像一个简单的Server, 负责后去一个个Stream
+			// 但是最终的handler还是转交给: s
 			st.HandleStreams(func(stream *transport.Stream) {
 				s.handleStream(st, stream)
 			})
+
+			// 服务退出, 取消登记注册
 			s.mu.Lock()
 			delete(s.conns, st)
 			s.mu.Unlock()
@@ -249,8 +277,10 @@ func (s *Server) sendResponse(t transport.ServerTransport, stream *transport.Str
 	return t.Write(stream, p, opts)
 }
 
-func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.Stream, srv *service, md *MethodDesc) (err error) {
+func (s *Server) processUnaryRPC(t transport.ServerTransport,
+	stream *transport.Stream, srv *service, md *MethodDesc) (err error) {
 	var traceInfo traceInfo
+
 	if EnableTracing {
 		traceInfo.tr = trace.New("grpc.Recv."+methodFamily(stream.Method()), stream.Method())
 		defer traceInfo.tr.Finish()
@@ -263,9 +293,13 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 			}
 		}()
 	}
+
+	// 如何解析参数呢?
 	p := &parser{s: stream}
 	for {
 		pf, req, err := p.recvMsg()
+
+		// 处理各种可能的Error(概率极低, 阅读代码时可以跳过)
 		if err == io.EOF {
 			// The entire stream is done (for unary RPC only).
 			return err
@@ -286,11 +320,16 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 		if traceInfo.tr != nil {
 			traceInfo.tr.LazyLog(&payload{sent: false, msg: req}, true)
 		}
+
+		// pf: PayloadFormat, 目前只支持compressionNone
 		switch pf {
 		case compressionNone:
 			statusCode := codes.OK
 			statusDesc := ""
+
 			reply, appErr := md.Handler(srv.server, stream.Context(), s.opts.codec, req)
+
+			// 处理异常
 			if appErr != nil {
 				if err, ok := appErr.(rpcError); ok {
 					statusCode = err.code
@@ -305,6 +344,8 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 				}
 				return nil
 			}
+
+			// 正常返回
 			opts := &transport.Options{
 				Last:  true,
 				Delay: false,
@@ -368,7 +409,10 @@ func (s *Server) processStreamingRPC(t transport.ServerTransport, stream *transp
 
 }
 
+// 如何处理来自client的Stream呢?
 func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Stream) {
+	// 这里面的Method应该是什么样的?
+	// /xxxxxx/
 	sm := stream.Method()
 	if sm != "" && sm[0] == '/' {
 		sm = sm[1:]
@@ -380,16 +424,24 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Str
 		}
 		return
 	}
+
+	// sm 类似一个URL:
+	//    [/]service/method
+	//    在同一个Go Process中，
 	service := sm[:pos]
 	method := sm[pos+1:]
 	srv, ok := s.m[service]
+
+	// 1. 报错: Server Not Found
 	if !ok {
 		if err := t.WriteStatus(stream, codes.Unimplemented, fmt.Sprintf("unknown service %v", service)); err != nil {
 			grpclog.Printf("grpc: Server.handleStream failed to write status: %v", err)
 		}
 		return
 	}
-	// Unary RPC or Streaming RPC?
+	// 2. Unary RPC or Streaming RPC?
+	// Unary 一元，或者简单的参数(即便有多个参数最终也被封装成为单个的InputParams)， 或者一口气传输完毕
+	// Streaming: 在一个stream上多次传输
 	if md, ok := srv.md[method]; ok {
 		s.processUnaryRPC(t, stream, srv, md)
 		return
@@ -398,6 +450,8 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Str
 		s.processStreamingRPC(t, stream, srv, sd)
 		return
 	}
+
+	// 3. Method Not Found
 	if err := t.WriteStatus(stream, codes.Unimplemented, fmt.Sprintf("unknown method %v", method)); err != nil {
 		grpclog.Printf("grpc: Server.handleStream failed to write status: %v", err)
 	}
