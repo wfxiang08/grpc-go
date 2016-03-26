@@ -177,6 +177,7 @@ func (c *tlsCreds) ClientHandshake(addr string, rawConn net.Conn, timeout time.D
 }
 
 func (c *tlsCreds) ServerHandshake(rawConn net.Conn) (net.Conn, AuthInfo, error) {
+	// 1. 实现服务器端的Conn的封装，进行Handshake
 	conn := tls.Server(rawConn, &c.config)
 	if err := conn.Handshake(); err != nil {
 		rawConn.Close()

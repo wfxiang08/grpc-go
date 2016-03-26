@@ -56,6 +56,9 @@ type Logger interface {
 	Println(args ...interface{})
 }
 
+
+// 统一GRPC中的Log, 默认打印到console, 也可以通过调用: SetLogger来指定日志打印的位置
+
 // SetLogger sets the logger that is used in grpc. Call only from
 // init() functions.
 func SetLogger(l Logger) {

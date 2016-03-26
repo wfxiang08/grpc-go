@@ -85,9 +85,10 @@ type service struct {
 
 // Server is a gRPC server to serve RPC requests.
 type Server struct {
-	opts options
+	opts   options
 
-	mu     sync.Mutex // guards following
+							   // 注意: golang的结构体的设计，变量的布局，注释...
+	mu     sync.Mutex          // guards following
 	lis    map[net.Listener]bool
 	conns  map[io.Closer]bool
 	m      map[string]*service // service name -> service info
@@ -151,12 +152,16 @@ func NewServer(opt ...ServerOption) *Server {
 		// Set the default codec.
 		opts.codec = protoCodec{}
 	}
+
+	// 1. 创建一个Server, 默认情况下: lis 为空, conns为空
 	s := &Server{
 		lis:   make(map[net.Listener]bool),
 		opts:  opts,
 		conns: make(map[io.Closer]bool),
 		m:     make(map[string]*service),
 	}
+
+	// 2. 如何Tracing, runtime?
 	if EnableTracing {
 		_, file, line, _ := runtime.Caller(1)
 		s.events = trace.NewEventLog("grpc.Server", fmt.Sprintf("%s:%d", file, line))
@@ -183,7 +188,14 @@ func (s *Server) errorf(format string, a ...interface{}) {
 // RegisterService register a service and its implementation to the gRPC
 // server. Called from the IDL generated code. This must be called before
 // invoking Serve.
+// 例如:
+// func RegisterGreeterServer(s *grpc.Server, srv GreeterServer) {
+// 	s.RegisterService(&_Greeter_serviceDesc, srv)
+// }
+// 通过pb生成的代码，会将: RegisterService 进行额外的包装, 将ServiceDesc封装起来
+//
 func (s *Server) RegisterService(sd *ServiceDesc, ss interface{}) {
+
 	ht := reflect.TypeOf(sd.HandlerType).Elem()
 	st := reflect.TypeOf(ss)
 	if !st.Implements(ht) {
@@ -192,6 +204,9 @@ func (s *Server) RegisterService(sd *ServiceDesc, ss interface{}) {
 	s.register(sd, ss)
 }
 
+//
+// 将服务注册到当前的Server上
+//
 func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -199,6 +214,11 @@ func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 	if _, ok := s.m[sd.ServiceName]; ok {
 		grpclog.Fatalf("grpc: Server.RegisterService found duplicate service registration for %q", sd.ServiceName)
 	}
+
+	// 生成Server内部的service的描述
+	// server: 具体的Handler
+	// md: Method Description
+	// sd: Stream description
 	srv := &service{
 		server: ss,
 		md:     make(map[string]*MethodDesc),
@@ -212,12 +232,14 @@ func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 		d := &sd.Streams[i]
 		srv.sd[d.StreamName] = d
 	}
+
+	// 注册服务
 	s.m[sd.ServiceName] = srv
 }
 
 var (
-	// ErrServerStopped indicates that the operation is now illegal because of
-	// the server being stopped.
+// ErrServerStopped indicates that the operation is now illegal because of
+// the server being stopped.
 	ErrServerStopped = errors.New("grpc: the server has been stopped")
 )
 
@@ -226,6 +248,8 @@ func (s *Server) useTransportAuthenticator(rawConn net.Conn) (net.Conn, credenti
 	if !ok {
 		return rawConn, nil, nil
 	}
+
+	// https/TLS等Handshake
 	return creds.ServerHandshake(rawConn)
 }
 
@@ -234,6 +258,12 @@ func (s *Server) useTransportAuthenticator(rawConn net.Conn) (net.Conn, credenti
 // read gRPC requests and then call the registered handlers to reply to them.
 // Service returns when lis.Accept fails.
 func (s *Server) Serve(lis net.Listener) error {
+	// 如何对外提供服务呢?
+
+	// 利用当前的listener对外提供服务
+
+	// 1. 服务的状态: lis == nil 停止服务
+	//               lis == map 正常服务
 	s.mu.Lock()
 	s.printf("serving")
 	if s.lis == nil {
@@ -242,20 +272,30 @@ func (s *Server) Serve(lis net.Listener) error {
 	}
 	s.lis[lis] = true
 	s.mu.Unlock()
+
+
+	// 2. 关闭当前的 lis
 	defer func() {
-		lis.Close()
+		lis.Close()  // 关闭当前的listener
+
 		s.mu.Lock()
-		delete(s.lis, lis)
+		delete(s.lis, lis)  // 删除当前的listener
 		s.mu.Unlock()
 	}()
+
+
+	// 3.
 	for {
 		rawConn, err := lis.Accept()
+
+		// 如果Accept出现错误，表示不再接受请求
 		if err != nil {
 			s.mu.Lock()
 			s.printf("done serving; Accept = %v", err)
 			s.mu.Unlock()
 			return err
 		}
+
 		// Start a new goroutine to deal with rawConn
 		// so we don't stall this Accept loop goroutine.
 		go s.handleRawConn(rawConn)
@@ -266,6 +306,8 @@ func (s *Server) Serve(lis net.Listener) error {
 // connection that has not had any I/O performed on it yet.
 func (s *Server) handleRawConn(rawConn net.Conn) {
 	conn, authInfo, err := s.useTransportAuthenticator(rawConn)
+
+	// HandShake Failed
 	if err != nil {
 		s.mu.Lock()
 		s.errorf("ServerHandshake(%q) failed: %v", rawConn.RemoteAddr(), err)
@@ -275,6 +317,7 @@ func (s *Server) handleRawConn(rawConn net.Conn) {
 		return
 	}
 
+	// 服务关闭
 	s.mu.Lock()
 	if s.conns == nil {
 		s.mu.Unlock()
@@ -296,6 +339,7 @@ func (s *Server) handleRawConn(rawConn net.Conn) {
 // This is run in its own goroutine (it does network I/O in
 // transport.NewServerTransport).
 func (s *Server) serveNewHTTP2Transport(c net.Conn, authInfo credentials.AuthInfo) {
+	// 在TCP等conn的基础上，实现了基于http2的Transport
 	st, err := transport.NewServerTransport("http2", c, s.opts.maxConcurrentStreams, authInfo)
 	if err != nil {
 		s.mu.Lock()
@@ -305,21 +349,26 @@ func (s *Server) serveNewHTTP2Transport(c net.Conn, authInfo credentials.AuthInf
 		grpclog.Println("grpc: Server.Serve failed to create ServerTransport: ", err)
 		return
 	}
+
+	// 添加transport
 	if !s.addConn(st) {
 		st.Close()
 		return
 	}
+	// 在conn上 Server Streams
 	s.serveStreams(st)
 }
 
 func (s *Server) serveStreams(st transport.ServerTransport) {
 	defer s.removeConn(st)
 	defer st.Close()
+
 	var wg sync.WaitGroup
 	st.HandleStreams(func(stream *transport.Stream) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// 将st的Stream交给s进行处理
 			s.handleStream(st, stream, s.traceInfo(st, stream))
 		}()
 	})
@@ -375,7 +424,7 @@ func (s *Server) traceInfo(st transport.ServerTransport, stream *transport.Strea
 		return nil
 	}
 	trInfo = &traceInfo{
-		tr: trace.New("grpc.Recv."+methodFamily(stream.Method()), stream.Method()),
+		tr: trace.New("grpc.Recv." + methodFamily(stream.Method()), stream.Method()),
 	}
 	trInfo.firstLine.client = false
 	trInfo.firstLine.remoteAddr = st.RemoteAddr()
@@ -423,6 +472,10 @@ func (s *Server) sendResponse(t transport.ServerTransport, stream *transport.Str
 	return t.Write(stream, p, opts)
 }
 
+
+//
+// service存在, MethodDesc也存在
+//
 func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.Stream, srv *service, md *MethodDesc, trInfo *traceInfo) (err error) {
 	if trInfo != nil {
 		defer trInfo.tr.Finish()
@@ -437,6 +490,7 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 	}
 	p := &parser{r: stream}
 	for {
+		// PayloadFormat, Request Data, Err
 		pf, req, err := p.recvMsg()
 		if err == io.EOF {
 			// The entire stream is done (for unary RPC only).
@@ -448,7 +502,8 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 		if err != nil {
 			switch err := err.(type) {
 			case transport.ConnectionError:
-				// Nothing to do here.
+			// Nothing to do here.
+			// 连接断开了，则直接返回
 			case transport.StreamError:
 				if err := t.WriteStatus(stream, err.Code, err.Desc); err != nil {
 					grpclog.Printf("grpc: Server.processUnaryRPC failed to write status %v", err)
@@ -473,10 +528,15 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 			}
 			return err
 		}
+
+		// 处理正常的Method Invocation
 		statusCode := codes.OK
 		statusDesc := ""
+
+		// Decode Input
 		df := func(v interface{}) error {
 			if pf == compressionMade {
+				// 如果数据有压缩，则通过opts中配置的Compressor/Decompressor进行处理
 				var err error
 				req, err = s.opts.dc.Do(bytes.NewReader(req))
 				if err != nil {
@@ -486,15 +546,45 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 					return err
 				}
 			}
+
+			// 将req中的数据反序列化到: v 中，例如:
+			//	in := new(HelloRequest)
+			//	if err := dec(in); err != nil {
+			//		return nil, err
+			//	}
 			if err := s.opts.codec.Unmarshal(req, v); err != nil {
 				return err
 			}
+
+			// 打印trace info
 			if trInfo != nil {
 				trInfo.tr.LazyLog(&payload{sent: false, msg: v}, true)
 			}
 			return nil
 		}
+
+
+		// 参考: func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error) (interface{}, error) {
+		//var _Greeter_serviceDesc = grpc.ServiceDesc{
+		//	ServiceName: "helloworld.Greeter",
+		//	HandlerType: (*GreeterServer)(nil),
+		//	Methods: []grpc.MethodDesc{
+		//		{
+		//			// 方法的描述
+		//			MethodName: "SayHello",
+		//			Handler:    _Greeter_SayHello_Handler,
+		//		},
+		//	},
+		//
+		//	// Streams如何处理呢?
+		//	Streams: []grpc.StreamDesc{},
+		//}
+		// Handler是直接可调用的函数
+		// 其中: df 接受输入参数的类型，进行数据的反序列化
+		//
 		reply, appErr := md.Handler(srv.server, stream.Context(), df)
+
+		// 如果处理应用返回来的Error
 		if appErr != nil {
 			if err, ok := appErr.(rpcError); ok {
 				statusCode = err.code
@@ -513,6 +603,8 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 			}
 			return nil
 		}
+
+		// 处理完毕之后，正常返回数据
 		if trInfo != nil {
 			trInfo.tr.LazyLog(stringer("OK"), false)
 		}
@@ -523,10 +615,12 @@ func (s *Server) processUnaryRPC(t transport.ServerTransport, stream *transport.
 		if s.opts.cp != nil {
 			stream.SetSendCompress(s.opts.cp.Type())
 		}
+
+		// 返回数据
 		if err := s.sendResponse(t, stream, reply, s.opts.cp, opts); err != nil {
 			switch err := err.(type) {
 			case transport.ConnectionError:
-				// Nothing to do here.
+			// Nothing to do here.
 			case transport.StreamError:
 				statusCode = err.Code
 				statusDesc = err.Desc
@@ -598,6 +692,10 @@ func (s *Server) processStreamingRPC(t transport.ServerTransport, stream *transp
 
 }
 
+
+//
+// 如何处理Stream呢?
+//
 func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Stream, trInfo *traceInfo) {
 	sm := stream.Method()
 	if sm != "" && sm[0] == '/' {
@@ -621,14 +719,22 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Str
 		}
 		return
 	}
+
+
+	// 例如: helloworld.Greeter/method
 	service := sm[:pos]
-	method := sm[pos+1:]
+	method := sm[pos + 1:]
+
+	// 1. 获取具体的Service
 	srv, ok := s.m[service]
+	// 1.1 如果Service不存在，则通过: WriteStatus 返回错误状态
 	if !ok {
 		if trInfo != nil {
 			trInfo.tr.LazyLog(&fmtStringer{"Unknown service %v", []interface{}{service}}, true)
 			trInfo.tr.SetError()
 		}
+
+		// 处理异常
 		if err := t.WriteStatus(stream, codes.Unimplemented, fmt.Sprintf("unknown service %v", service)); err != nil {
 			if trInfo != nil {
 				trInfo.tr.LazyLog(&fmtStringer{"%v", []interface{}{err}}, true)
@@ -642,14 +748,20 @@ func (s *Server) handleStream(t transport.ServerTransport, stream *transport.Str
 		return
 	}
 	// Unary RPC or Streaming RPC?
+
+	// 2. 处理Method
 	if md, ok := srv.md[method]; ok {
 		s.processUnaryRPC(t, stream, srv, md, trInfo)
 		return
 	}
+
+	// 3. 处理Stream
 	if sd, ok := srv.sd[method]; ok {
 		s.processStreamingRPC(t, stream, srv, sd, trInfo)
 		return
 	}
+
+	// 2,3.1 处理未实现的Method
 	if trInfo != nil {
 		trInfo.tr.LazyLog(&fmtStringer{"Unknown method %v", []interface{}{method}}, true)
 		trInfo.tr.SetError()

@@ -1,40 +1,3 @@
-/*
- *
- * Copyright 2015, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
-// Package main implements a simple gRPC client that demonstrates how to use gRPC-Go libraries
-// to perform unary, client streaming, server streaming and full duplex RPCs.
-//
-// It interacts with the route guide service whose definition can be found in proto/route_guide.proto.
 package main
 
 import (
@@ -60,6 +23,7 @@ var (
 // printFeature gets the feature for the given point.
 func printFeature(client pb.RouteGuideClient, point *pb.Point) {
 	grpclog.Printf("Getting feature for point (%d, %d)", point.Latitude, point.Longitude)
+
 	feature, err := client.GetFeature(context.Background(), point)
 	if err != nil {
 		grpclog.Fatalf("%v.GetFeatures(_) = _, %v: ", client, err)
@@ -96,6 +60,8 @@ func runRecordRoute(client pb.RouteGuideClient) {
 		points = append(points, randomPoint(r))
 	}
 	grpclog.Printf("Traversing %d points.", len(points))
+
+	// 通过Stream的方式将数据发送到服务器
 	stream, err := client.RecordRoute(context.Background())
 	if err != nil {
 		grpclog.Fatalf("%v.RecordRoute(_) = _, %v", client, err)
@@ -105,6 +71,8 @@ func runRecordRoute(client pb.RouteGuideClient) {
 			grpclog.Fatalf("%v.Send(%v) = %v", stream, point, err)
 		}
 	}
+
+	// 一口气发送完毕
 	reply, err := stream.CloseAndRecv()
 	if err != nil {
 		grpclog.Fatalf("%v.CloseAndRecv() got error %v, want %v", stream, err, nil)
@@ -141,12 +109,16 @@ func runRouteChat(client pb.RouteGuideClient) {
 			grpclog.Printf("Got message %s at point(%d, %d)", in.Message, in.Location.Latitude, in.Location.Longitude)
 		}
 	}()
+
+	// 发送数据&关闭连接
 	for _, note := range notes {
 		if err := stream.Send(note); err != nil {
 			grpclog.Fatalf("Failed to send a note: %v", err)
 		}
 	}
 	stream.CloseSend()
+
+	// 等待: stream的Close(数据读取完毕
 	<-waitc
 }
 
@@ -159,6 +131,8 @@ func randomPoint(r *rand.Rand) *pb.Point {
 func main() {
 	flag.Parse()
 	var opts []grpc.DialOption
+
+	// 如何使用: TLS呢?
 	if *tls {
 		var sn string
 		if *serverHostOverride != "" {
@@ -178,6 +152,8 @@ func main() {
 	} else {
 		opts = append(opts, grpc.WithInsecure())
 	}
+
+	// 2. 连接服务器
 	conn, err := grpc.Dial(*serverAddr, opts...)
 	if err != nil {
 		grpclog.Fatalf("fail to dial: %v", err)

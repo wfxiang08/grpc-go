@@ -41,6 +41,8 @@ import (
 	"google.golang.org/grpc/grpclog"
 )
 
+// grpclog 默认是用 stderr
+// 如果import了glogger, 则使用glogger的实现; 最终调用glog
 func init() {
 	grpclog.SetLogger(&glogger{})
 }

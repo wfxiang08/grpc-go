@@ -422,6 +422,9 @@ var _RouteGuide_serviceDesc = grpc.ServiceDesc{
 			Handler:    _RouteGuide_GetFeature_Handler,
 		},
 	},
+
+	// Streams的定义: 方向
+
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ListFeatures",

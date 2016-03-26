@@ -23,6 +23,10 @@ func NewHealthServer() *HealthServer {
 	}
 }
 
+
+// 查询当前Server所监控的服务的状态
+// Service: ""
+//          具体的服务名
 func (s *HealthServer) Check(ctx context.Context, in *healthpb.HealthCheckRequest) (*healthpb.HealthCheckResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

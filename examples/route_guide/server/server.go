@@ -1,40 +1,3 @@
-/*
- *
- * Copyright 2015, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
-// Package main implements a simple gRPC server that demonstrates how to use gRPC-Go libraries
-// to perform unary, client streaming, server streaming and full duplex RPCs.
-//
-// It implements the route guide service whose definition can be found in proto/route_guide.proto.
 package main
 
 import (
@@ -58,12 +21,13 @@ import (
 	pb "google.golang.org/grpc/examples/route_guide/routeguide"
 )
 
+// 1. 定制: flag
 var (
-	tls        = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
-	certFile   = flag.String("cert_file", "testdata/server1.pem", "The TLS cert file")
-	keyFile    = flag.String("key_file", "testdata/server1.key", "The TLS key file")
+	tls = flag.Bool("tls", false, "Connection uses TLS if true, else plain TCP")
+	certFile = flag.String("cert_file", "testdata/server1.pem", "The TLS cert file")
+	keyFile = flag.String("key_file", "testdata/server1.key", "The TLS key file")
 	jsonDBFile = flag.String("json_db_file", "testdata/route_guide_db.json", "A json file containing a list of features")
-	port       = flag.Int("port", 10000, "The server port")
+	port = flag.Int("port", 10000, "The server port")
 )
 
 type routeGuideServer struct {
@@ -74,6 +38,7 @@ type routeGuideServer struct {
 // GetFeature returns the feature at the given point.
 func (s *routeGuideServer) GetFeature(ctx context.Context, point *pb.Point) (*pb.Feature, error) {
 	for _, feature := range s.savedFeatures {
+		// 如何比较两个对象呢?
 		if proto.Equal(feature.Location, point) {
 			return feature, nil
 		}
@@ -104,9 +69,12 @@ func (s *routeGuideServer) RecordRoute(stream pb.RouteGuide_RecordRouteServer) e
 	var lastPoint *pb.Point
 	startTime := time.Now()
 	for {
+		// 1. 从stream中读取结构化的数据
 		point, err := stream.Recv()
 		if err == io.EOF {
 			endTime := time.Now()
+			// 如何返回数据呢?
+			// 直接在stream的基础上调用一次: Send
 			return stream.SendAndClose(&pb.RouteSummary{
 				PointCount:   pointCount,
 				FeatureCount: featureCount,
@@ -147,6 +115,9 @@ func (s *routeGuideServer) RouteChat(stream pb.RouteGuide_RouteChatServer) error
 		} else {
 			s.routeNotes[key] = append(s.routeNotes[key], in)
 		}
+
+		// 一遍接受，一遍返回数据
+		// stream <--> stream
 		for _, note := range s.routeNotes[key] {
 			if err := stream.Send(note); err != nil {
 				return err
@@ -184,10 +155,10 @@ func calcDistance(p1 *pb.Point, p2 *pb.Point) int32 {
 	Δφ := toRadians(lat2 - lat1)
 	Δλ := toRadians(lng2 - lng1)
 
-	a := math.Sin(Δφ/2)*math.Sin(Δφ/2) +
-		math.Cos(φ1)*math.Cos(φ2)*
-			math.Sin(Δλ/2)*math.Sin(Δλ/2)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	a := math.Sin(Δφ / 2) * math.Sin(Δφ / 2) +
+	math.Cos(φ1) * math.Cos(φ2) *
+	math.Sin(Δλ / 2) * math.Sin(Δλ / 2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1 - a))
 
 	distance := R * c
 	return int32(distance)
@@ -200,9 +171,9 @@ func inRange(point *pb.Point, rect *pb.Rectangle) bool {
 	bottom := math.Min(float64(rect.Lo.Latitude), float64(rect.Hi.Latitude))
 
 	if float64(point.Longitude) >= left &&
-		float64(point.Longitude) <= right &&
-		float64(point.Latitude) >= bottom &&
-		float64(point.Latitude) <= top {
+	float64(point.Longitude) <= right &&
+	float64(point.Latitude) >= bottom &&
+	float64(point.Latitude) <= top {
 		return true
 	}
 	return false
@@ -220,11 +191,16 @@ func newServer() *routeGuideServer {
 }
 
 func main() {
+	// 2. 解析flags
 	flag.Parse()
+
+	// 3. 监听端口
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
 	if err != nil {
 		grpclog.Fatalf("failed to listen: %v", err)
 	}
+
+	// 4. 指定TLS
 	var opts []grpc.ServerOption
 	if *tls {
 		creds, err := credentials.NewServerTLSFromFile(*certFile, *keyFile)
@@ -233,6 +209,8 @@ func main() {
 		}
 		opts = []grpc.ServerOption{grpc.Creds(creds)}
 	}
+
+	// 关联Server和Handler
 	grpcServer := grpc.NewServer(opts...)
 	pb.RegisterRouteGuideServer(grpcServer, newServer())
 	grpcServer.Serve(lis)

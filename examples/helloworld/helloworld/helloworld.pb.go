@@ -108,15 +108,23 @@ func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(in
 	return out, nil
 }
 
+
+// 服务的名称:
+// package.Service
+// HandlerType: 接口类型
+// 方法:
 var _Greeter_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "helloworld.Greeter",
 	HandlerType: (*GreeterServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			// 方法的描述
 			MethodName: "SayHello",
 			Handler:    _Greeter_SayHello_Handler,
 		},
 	},
+
+	// Streams如何处理呢?
 	Streams: []grpc.StreamDesc{},
 }
 
