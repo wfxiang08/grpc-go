@@ -52,6 +52,7 @@ import (
 	"google.golang.org/grpc/transport"
 )
 
+// X1: 定义了gRPC的编码解码的接口
 // Codec defines the interface gRPC uses to encode and decode messages.
 type Codec interface {
 	// Marshal returns the wire format of v.
@@ -63,6 +64,7 @@ type Codec interface {
 	String() string
 }
 
+// X2: 默认定义了基于protobuf的编码解码
 // protoCodec is a Codec implemetation with protobuf. It is the default codec for gRPC.
 type protoCodec struct{}
 
@@ -78,6 +80,8 @@ func (protoCodec) String() string {
 	return "proto"
 }
 
+
+// X3. 定义了Compressor的接口
 // Compressor defines the interface gRPC uses to compress a message.
 type Compressor interface {
 	// Do compresses p into w.
@@ -86,6 +90,8 @@ type Compressor interface {
 	Type() string
 }
 
+
+// X4. 默认实现了基于GZip的压缩算法
 // NewGZIPCompressor creates a Compressor based on GZIP.
 func NewGZIPCompressor() Compressor {
 	return &gzipCompressor{}
@@ -95,6 +101,7 @@ type gzipCompressor struct {
 }
 
 func (c *gzipCompressor) Do(w io.Writer, p []byte) error {
+	// gzip将Writer做一个wrap即可是实现这个效果
 	z := gzip.NewWriter(w)
 	if _, err := z.Write(p); err != nil {
 		return err
@@ -106,6 +113,7 @@ func (c *gzipCompressor) Type() string {
 	return "gzip"
 }
 
+// X5. 定义了解压缩的算法
 // Decompressor defines the interface gRPC uses to decompress a message.
 type Decompressor interface {
 	// Do reads the data from r and uncompress them.
@@ -135,15 +143,16 @@ func (d *gzipDecompressor) Type() string {
 	return "gzip"
 }
 
+// X6. RPC调用的配置信息
 // callInfo contains all related configuration and information about an RPC.
 type callInfo struct {
-	failFast  bool
+	failFast  bool      // 是否遇到失败马上放弃呢?
 	headerMD  metadata.MD
 	trailerMD metadata.MD
 	traceInfo traceInfo // in trace.go
 }
 
-// CallOption configures a Call before it starts or extracts information from
+// X7. CallOption configures a Call before it starts or extracts information from
 // a Call after it completes.
 type CallOption interface {
 	// before is called before the call is sent to any server.  If before
@@ -155,15 +164,17 @@ type CallOption interface {
 	after(*callInfo)
 }
 
+// X8. beforeCall & afterCall的作用
+// 类型转换：func(c *callInfo) ---> beforeCall or afterCall, 于是这个函数就有额外的动作，或者可以在不同的阶段被执行
 type beforeCall func(c *callInfo) error
 
 func (o beforeCall) before(c *callInfo) error { return o(c) }
-func (o beforeCall) after(c *callInfo)        {}
+func (o beforeCall) after(c *callInfo) {}
 
 type afterCall func(c *callInfo)
 
 func (o afterCall) before(c *callInfo) error { return nil }
-func (o afterCall) after(c *callInfo)        { o(c) }
+func (o afterCall) after(c *callInfo) { o(c) }
 
 // Header returns a CallOptions that retrieves the header metadata
 // for a unary RPC.
@@ -189,12 +200,13 @@ const (
 	compressionMade
 )
 
+// X9. 定义了gRPC消息的parser
 // parser reads complelete gRPC messages from the underlying reader.
 type parser struct {
 	// r is the underlying reader.
 	// See the comment on recvMsg for the permissible
 	// error types.
-	r io.Reader
+	r      io.Reader
 
 	// The header of a gRPC message. Find more detail
 	// at http://www.grpc.io/docs/guides/wire.html.
@@ -215,6 +227,8 @@ type parser struct {
 // that the underlying io.Reader must not return an incompatible
 // error.
 func (p *parser) recvMsg() (pf payloadFormat, msg []byte, err error) {
+	// gRPC消息的格式:
+	// compress(1字节) + payloadLength(4字节)
 	if _, err := io.ReadFull(p.r, p.header[:]); err != nil {
 		return 0, nil, err
 	}
@@ -222,6 +236,7 @@ func (p *parser) recvMsg() (pf payloadFormat, msg []byte, err error) {
 	pf = payloadFormat(p.header[0])
 	length := binary.BigEndian.Uint32(p.header[1:])
 
+	// 0长度，可能是HealthChecker或者Keepalive等等
 	if length == 0 {
 		return pf, nil, nil
 	}
@@ -234,6 +249,9 @@ func (p *parser) recvMsg() (pf payloadFormat, msg []byte, err error) {
 		}
 		return 0, nil, err
 	}
+
+	// 返回消息
+	// 压缩格式, 消息内容，<no_error>
 	return pf, msg, nil
 }
 
@@ -245,11 +263,15 @@ func encode(c Codec, msg interface{}, cp Compressor, cbuf *bytes.Buffer) ([]byte
 	if msg != nil {
 		var err error
 		// TODO(zhaoq): optimize to reduce memory alloc and copying.
+		// 1. 数据编码
 		b, err = c.Marshal(msg)
 		if err != nil {
 			return nil, err
 		}
+
+		// 2. 数据压缩
 		if cp != nil {
+			// cbuf似乎不能有状态
 			if err := cp.Do(cbuf, b); err != nil {
 				return nil, err
 			}
@@ -257,16 +279,21 @@ func encode(c Codec, msg interface{}, cp Compressor, cbuf *bytes.Buffer) ([]byte
 		}
 		length = uint(len(b))
 	}
+
+	// 3. 输入数据过长, 异常处理
 	if length > math.MaxUint32 {
 		return nil, Errorf(codes.InvalidArgument, "grpc: message too large (%d bytes)", length)
 	}
 
 	const (
 		payloadLen = 1
-		sizeLen    = 4
+		sizeLen = 4
 	)
 
-	var buf = make([]byte, payloadLen+sizeLen+len(b))
+	// buf中的数据格式:
+	// 压缩选项(1字节) + 数据长度(4字节) + Payload
+	// 和thrift比较类似，也是: length + data(只是没有压缩的选项)
+	var buf = make([]byte, payloadLen + sizeLen + len(b))
 
 	// Write payload format
 	if cp == nil {
@@ -286,6 +313,7 @@ func checkRecvPayload(pf payloadFormat, recvCompress string, dc Decompressor) er
 	switch pf {
 	case compressionNone:
 	case compressionMade:
+		// 验证压缩算法有效，并且和本地的Decompressor的算法一样
 		if recvCompress == "" {
 			return transport.StreamErrorf(codes.InvalidArgument, "grpc: invalid grpc-encoding %q with compression enabled", recvCompress)
 		}
@@ -299,25 +327,33 @@ func checkRecvPayload(pf payloadFormat, recvCompress string, dc Decompressor) er
 }
 
 func recv(p *parser, c Codec, s *transport.Stream, dc Decompressor, m interface{}) error {
+	// 1. 获取1帧请求数据
 	pf, d, err := p.recvMsg()
 	if err != nil {
 		return err
 	}
+
+	// 2. 压缩算法在 Stream中都已经通信过?
 	if err := checkRecvPayload(pf, s.RecvCompress(), dc); err != nil {
 		return err
 	}
+
+	// 3. 解压缩数据
 	if pf == compressionMade {
 		d, err = dc.Do(bytes.NewReader(d))
 		if err != nil {
 			return transport.StreamErrorf(codes.Internal, "grpc: failed to decompress the received message %v", err)
 		}
 	}
+
+	// 4. 反序列化(可以使用protobuf, 也可以使用thrift等等)
 	if err := c.Unmarshal(d, m); err != nil {
 		return transport.StreamErrorf(codes.Internal, "grpc: failed to unmarshal the received message %v", err)
 	}
 	return nil
 }
 
+//
 // rpcError defines the status from an RPC.
 type rpcError struct {
 	code codes.Code
@@ -346,9 +382,13 @@ func ErrorDesc(err error) string {
 	if err == nil {
 		return ""
 	}
+
+	// 针对: rpcError特殊处理
 	if e, ok := err.(rpcError); ok {
 		return e.desc
 	}
+
+	// 使用error的默认描述
 	return err.Error()
 }
 
@@ -358,6 +398,8 @@ func Errorf(c codes.Code, format string, a ...interface{}) error {
 	if c == codes.OK {
 		return nil
 	}
+
+	// 如何格式化: Error
 	return rpcError{
 		code: c,
 		desc: fmt.Sprintf(format, a...),
@@ -365,6 +407,7 @@ func Errorf(c codes.Code, format string, a ...interface{}) error {
 }
 
 // toRPCErr converts an error into a rpcError.
+// 将各种不同的error统一以 rpcError的接口进行封装
 func toRPCErr(err error) error {
 	switch e := err.(type) {
 	case rpcError:
@@ -412,13 +455,13 @@ func convertCode(err error) codes.Code {
 }
 
 const (
-	// how long to wait after the first failure before retrying
+// how long to wait after the first failure before retrying
 	baseDelay = 1.0 * time.Second
-	// upper bound of backoff delay
+// upper bound of backoff delay
 	maxDelay = 120 * time.Second
-	// backoff increases by this factor on each retry
+// backoff increases by this factor on each retry
 	backoffFactor = 1.6
-	// backoff is randomized downwards by this factor
+// backoff is randomized downwards by this factor
 	backoffJitter = 0.2
 )
 
@@ -426,6 +469,9 @@ func backoff(retries int) (t time.Duration) {
 	if retries == 0 {
 		return baseDelay
 	}
+
+	// 退避时间
+	//      retries 次数越多，backoff越大, 为什么不直接调用数学函数呢? 可能有 retries次数的乘法运算
 	backoff, max := float64(baseDelay), float64(maxDelay)
 	for backoff < max && retries > 0 {
 		backoff *= backoffFactor
@@ -436,7 +482,7 @@ func backoff(retries int) (t time.Duration) {
 	}
 	// Randomize backoff delays so that if a cluster of requests start at
 	// the same time, they won't operate in lockstep.
-	backoff *= 1 + backoffJitter*(rand.Float64()*2-1)
+	backoff *= 1 + backoffJitter * (rand.Float64() * 2 - 1)
 	if backoff < 0 {
 		return 0
 	}

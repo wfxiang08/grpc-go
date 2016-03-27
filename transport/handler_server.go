@@ -1,35 +1,3 @@
-/*
- * Copyright 2016, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
 // This file is the implementation of a gRPC server using HTTP/2 which
 // uses the standard Go http2 Server implementation (via the
 // http.Handler interface), rather than speaking low-level HTTP/2
@@ -59,12 +27,15 @@ import (
 // from inside an http.Handler. It requires that the http Server
 // supports HTTP/2.
 func NewServerHandlerTransport(w http.ResponseWriter, r *http.Request) (ServerTransport, error) {
+	// 1. http2协议，所有的数据都通过POST来传递
 	if r.ProtoMajor != 2 {
 		return nil, errors.New("gRPC requires HTTP/2")
 	}
 	if r.Method != "POST" {
 		return nil, errors.New("invalid gRPC request method")
 	}
+
+	// 2. Content-Type, 以及 ResponseWriter需要实现特定的接口
 	if !strings.Contains(r.Header.Get("Content-Type"), "application/grpc") {
 		return nil, errors.New("invalid gRPC request content-type")
 	}
@@ -75,6 +46,7 @@ func NewServerHandlerTransport(w http.ResponseWriter, r *http.Request) (ServerTr
 		return nil, errors.New("gRPC requires a ResponseWriter supporting http.CloseNotifier")
 	}
 
+	// 3. 构建Transport, 设置: timeout等
 	st := &serverHandlerTransport{
 		rw:       w,
 		req:      r,
@@ -91,6 +63,7 @@ func NewServerHandlerTransport(w http.ResponseWriter, r *http.Request) (ServerTr
 		st.timeout = to
 	}
 
+	// 4. 似乎: Request.Header 在第一个就把所有的信息都传递过来，然后交给: Transport的hederMD(以后就不用再传递这些信息，例如: 各种Cookie啥的)
 	var metakv []string
 	for k, vv := range r.Header {
 		k = strings.ToLower(k)
@@ -128,15 +101,15 @@ type serverHandlerTransport struct {
 	timeout          time.Duration
 	didCommonHeaders bool
 
-	headerMD metadata.MD
+	headerMD         metadata.MD   // 共享的Headers
 
-	closeOnce sync.Once
-	closedCh  chan struct{} // closed on Close
+	closeOnce        sync.Once
+	closedCh         chan struct{} // closed on Close
 
-	// writes is a channel of code to run serialized in the
-	// ServeHTTP (HandleStreams) goroutine. The channel is closed
-	// when WriteStatus is called.
-	writes chan func()
+								   // writes is a channel of code to run serialized in the
+								   // ServeHTTP (HandleStreams) goroutine. The channel is closed
+								   // when WriteStatus is called.
+	writes           chan func()
 }
 
 func (ht *serverHandlerTransport) Close() error {
@@ -200,7 +173,7 @@ func (ht *serverHandlerTransport) WriteStatus(s *Stream, statusCode codes.Code, 
 					// http2 ResponseWriter mechanism to
 					// send undeclared Trailers after the
 					// headers have possibly been written.
-					h.Add(http2.TrailerPrefix+k, v)
+					h.Add(http2.TrailerPrefix + k, v)
 				}
 			}
 		}
@@ -258,6 +231,10 @@ func (ht *serverHandlerTransport) WriteHeader(s *Stream, md metadata.MD) error {
 	})
 }
 
+
+//
+// XXX: 如何处理各种stream呢?
+//
 func (ht *serverHandlerTransport) HandleStreams(startStream func(*Stream)) {
 	// With this transport type there will be exactly 1 stream: this HTTP request.
 
@@ -290,7 +267,7 @@ func (ht *serverHandlerTransport) HandleStreams(startStream func(*Stream)) {
 	req := ht.req
 
 	s := &Stream{
-		id:            0,            // irrelevant
+		id:            0, // irrelevant
 		windowHandler: func(int) {}, // nothing
 		cancel:        cancel,
 		buf:           newRecvBuffer(),

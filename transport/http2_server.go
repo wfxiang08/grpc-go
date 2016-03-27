@@ -58,41 +58,43 @@ var ErrIllegalHeaderWrite = errors.New("transport: the stream is done or WriteHe
 
 // http2Server implements the ServerTransport interface with HTTP2.
 type http2Server struct {
-	conn        net.Conn
-	maxStreamID uint32               // max stream ID ever seen
-	authInfo    credentials.AuthInfo // auth info about the connection
-	// writableChan synchronizes write access to the transport.
-	// A writer acquires the write lock by receiving a value on writableChan
-	// and releases it by sending on writableChan.
-	writableChan chan int
-	// shutdownChan is closed when Close is called.
-	// Blocking operations should select on shutdownChan to avoid
-	// blocking forever after Close.
-	shutdownChan chan struct{}
-	framer       *framer
-	hBuf         *bytes.Buffer  // the buffer for HPACK encoding
-	hEnc         *hpack.Encoder // HPACK encoder
+	conn            net.Conn
+	maxStreamID     uint32               // max stream ID ever seen
+	authInfo        credentials.AuthInfo // auth info about the connection
+										 // writableChan synchronizes write access to the transport.
+										 // A writer acquires the write lock by receiving a value on writableChan
+										 // and releases it by sending on writableChan.
+	writableChan    chan int
+										 // shutdownChan is closed when Close is called.
+										 // Blocking operations should select on shutdownChan to avoid
+										 // blocking forever after Close.
+	shutdownChan    chan struct{}
+	framer          *framer
+	hBuf            *bytes.Buffer        // the buffer for HPACK encoding
+	hEnc            *hpack.Encoder       // HPACK encoder
 
-	// The max number of concurrent streams.
-	maxStreams uint32
-	// controlBuf delivers all the control related tasks (e.g., window
-	// updates, reset streams, and various settings) to the controller.
-	controlBuf *recvBuffer
-	fc         *inFlow
-	// sendQuotaPool provides flow control to outbound message.
-	sendQuotaPool *quotaPool
+										 // The max number of concurrent streams.
+	maxStreams      uint32
+										 // controlBuf delivers all the control related tasks (e.g., window
+										 // updates, reset streams, and various settings) to the controller.
+	controlBuf      *recvBuffer
+	fc              *inFlow
+										 // sendQuotaPool provides flow control to outbound message.
+	sendQuotaPool   *quotaPool
 
-	mu            sync.Mutex // guard the following
-	state         transportState
-	activeStreams map[uint32]*Stream
-	// the per-stream outbound flow control window size set by the peer.
+	mu              sync.Mutex           // guard the following
+	state           transportState
+	activeStreams   map[uint32]*Stream
+										 // the per-stream outbound flow control window size set by the peer.
 	streamSendQuota uint32
 }
 
 // newHTTP2Server constructs a ServerTransport based on HTTP2. ConnectionError is
 // returned if something goes wrong.
 func newHTTP2Server(conn net.Conn, maxStreams uint32, authInfo credentials.AuthInfo) (_ ServerTransport, err error) {
+	// 1. framer的创建
 	framer := newFramer(conn)
+
 	// Send initial settings as connection preface to client.
 	var settings []http2.Setting
 	// TODO(zhaoq): Have a better way to signal "no limit" because 0 is
@@ -105,6 +107,8 @@ func newHTTP2Server(conn net.Conn, maxStreams uint32, authInfo credentials.AuthI
 	if initialWindowSize != defaultWindowSize {
 		settings = append(settings, http2.Setting{http2.SettingInitialWindowSize, uint32(initialWindowSize)})
 	}
+
+	// 2. 将settings写出到frames(client中)
 	if err := framer.writeSettings(true, settings...); err != nil {
 		return nil, ConnectionErrorf("transport: %v", err)
 	}
@@ -131,6 +135,8 @@ func newHTTP2Server(conn net.Conn, maxStreams uint32, authInfo credentials.AuthI
 		activeStreams:   make(map[uint32]*Stream),
 		streamSendQuota: defaultWindowSize,
 	}
+
+	// 异步处理流量控制等等
 	go t.controller()
 	t.writableChan <- 0
 	return t, nil
@@ -244,7 +250,10 @@ func (t *http2Server) HandleStreams(handle func(*Stream)) {
 	t.handleSettings(sf)
 
 	for {
+		// 1. 读取一帧的数据
 		frame, err := t.framer.readFrame()
+
+
 		if err != nil {
 			if se, ok := err.(http2.StreamError); ok {
 				t.mu.Lock()
@@ -259,10 +268,14 @@ func (t *http2Server) HandleStreams(handle func(*Stream)) {
 			t.Close()
 			return
 		}
+
+		// 2. Frame的不同类型
+		//    MetaHeadersFrame
 		switch frame := frame.(type) {
+		// Headers
 		case *http2.MetaHeadersFrame:
 			id := frame.Header().StreamID
-			if id%2 != 1 || id <= t.maxStreamID {
+			if id % 2 != 1 || id <= t.maxStreamID {
 				// illegal gRPC stream id.
 				grpclog.Println("transport: http2Server.HandleStreams received an illegal stream id: ", id)
 				t.Close()
@@ -270,6 +283,7 @@ func (t *http2Server) HandleStreams(handle func(*Stream)) {
 			}
 			t.maxStreamID = id
 			t.operateHeaders(frame, handle)
+		// 普通的数据帧
 		case *http2.DataFrame:
 			t.handleData(frame)
 		case *http2.RSTStreamFrame:
@@ -356,6 +370,7 @@ func (t *http2Server) handleData(f *http2.DataFrame) {
 	}
 }
 
+// 接受到: RST 信号，则直接关闭 Stream
 func (t *http2Server) handleRSTStream(f *http2.RSTStreamFrame) {
 	s, ok := t.getStream(f)
 	if !ok {
@@ -378,6 +393,7 @@ func (t *http2Server) handleSettings(f *http2.SettingsFrame) {
 }
 
 func (t *http2Server) handlePing(f *http2.PingFrame) {
+	// 如何处理Ping呢?
 	pingAck := &ping{ack: true}
 	copy(pingAck.data[:], f.Data[:])
 	t.controlBuf.put(pingAck)
@@ -620,32 +636,32 @@ func (t *http2Server) controller() {
 		select {
 		case i := <-t.controlBuf.get():
 			t.controlBuf.load()
-			select {
-			case <-t.writableChan:
-				switch i := i.(type) {
-				case *windowUpdate:
-					t.framer.writeWindowUpdate(true, i.streamID, i.increment)
-				case *settings:
-					if i.ack {
-						t.framer.writeSettingsAck(true)
-						t.applySettings(i.ss)
-					} else {
-						t.framer.writeSettings(true, i.ss...)
+				select {
+				case <-t.writableChan:
+					switch i := i.(type) {
+					case *windowUpdate:
+						t.framer.writeWindowUpdate(true, i.streamID, i.increment)
+					case *settings:
+						if i.ack {
+							t.framer.writeSettingsAck(true)
+							t.applySettings(i.ss)
+						} else {
+							t.framer.writeSettings(true, i.ss...)
+						}
+					case *resetStream:
+						t.framer.writeRSTStream(true, i.streamID, i.code)
+					case *flushIO:
+						t.framer.flushWrite()
+					case *ping:
+						t.framer.writePing(true, i.ack, i.data)
+					default:
+						grpclog.Printf("transport: http2Server.controller got unexpected item type %v\n", i)
 					}
-				case *resetStream:
-					t.framer.writeRSTStream(true, i.streamID, i.code)
-				case *flushIO:
-					t.framer.flushWrite()
-				case *ping:
-					t.framer.writePing(true, i.ack, i.data)
-				default:
-					grpclog.Printf("transport: http2Server.controller got unexpected item type %v\n", i)
+					t.writableChan <- 0
+					continue
+				case <-t.shutdownChan:
+					return
 				}
-				t.writableChan <- 0
-				continue
-			case <-t.shutdownChan:
-				return
-			}
 		case <-t.shutdownChan:
 			return
 		}

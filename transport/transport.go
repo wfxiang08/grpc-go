@@ -458,6 +458,10 @@ func ConnectionErrorf(format string, a ...interface{}) ConnectionError {
 	}
 }
 
+// 概念:
+// Connection   ConnectionError (所有的Stream都会受到影响)
+// Stream       StreamError
+//
 // ConnectionError is an error that results in the termination of the
 // entire connection and the retry of all the active streams.
 type ConnectionError struct {

@@ -1,36 +1,3 @@
-/*
- *
- * Copyright 2014, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
 package grpc
 
 import (
@@ -44,8 +11,10 @@ import (
 	"google.golang.org/grpc/transport"
 )
 
+//----------------------------------------------------------------------------------------------------------------------
 // Picker picks a Conn for RPC requests.
 // This is EXPERIMENTAL and please do not implement your own Picker for now.
+// 1. XXX: 暂时不要实现自己的Picker
 type Picker interface {
 	// Init does initial processing for the Picker, e.g., initiate some connections.
 	Init(cc *ClientConn) error
@@ -64,6 +33,8 @@ type Picker interface {
 	Close() error
 }
 
+//----------------------------------------------------------------------------------------------------------------------
+// 2. 默认实现: unicastPicker
 // unicastPicker is the default Picker which is used when there is no custom Picker
 // specified by users. It always picks the same Conn.
 type unicastPicker struct {
@@ -72,6 +43,7 @@ type unicastPicker struct {
 }
 
 func (p *unicastPicker) Init(cc *ClientConn) error {
+	// XXX: 创建一个Connection/gRPC Connection
 	c, err := NewConn(cc)
 	if err != nil {
 		return err
@@ -84,10 +56,12 @@ func (p *unicastPicker) Pick(ctx context.Context) (transport.ClientTransport, er
 	return p.conn.Wait(ctx)
 }
 
+// 获取Picker的信息: Addr
 func (p *unicastPicker) PickAddr() (string, error) {
 	return p.target, nil
 }
 
+// 当前的State
 func (p *unicastPicker) State() (ConnectivityState, error) {
 	return p.conn.State(), nil
 }
@@ -103,6 +77,7 @@ func (p *unicastPicker) Close() error {
 	return nil
 }
 
+//----------------------------------------------------------------------------------------------------------------------
 // unicastNamingPicker picks an address from a name resolver to set up the connection.
 type unicastNamingPicker struct {
 	cc       *ClientConn
@@ -134,10 +109,13 @@ type addrInfo struct {
 
 // processUpdates calls Watcher.Next() once and processes the obtained updates.
 func (p *unicastNamingPicker) processUpdates() error {
+	// 1. 等待: updates的出现
 	updates, err := p.watcher.Next()
 	if err != nil {
 		return err
 	}
+
+	// 2. 更新Updates
 	for _, update := range updates {
 		switch update.Op {
 		case naming.Add:
@@ -156,6 +134,7 @@ func (p *unicastNamingPicker) processUpdates() error {
 			}
 		case naming.Delete:
 			p.mu.Lock()
+			// 删除: addrs
 			for e := p.addrs.Front(); e != nil; e = e.Next() {
 				if update.Addr == e.Value.(*addrInfo).addr {
 					if e == p.pickedAddr {
@@ -181,6 +160,7 @@ func (p *unicastNamingPicker) processUpdates() error {
 // monitor runs in a standalone goroutine to keep watching name resolution updates until the watcher
 // is closed.
 func (p *unicastNamingPicker) monitor() {
+	// 不同地监控状态
 	for {
 		if err := p.processUpdates(); err != nil {
 			return
@@ -195,6 +175,8 @@ func (p *unicastNamingPicker) Init(cc *ClientConn) error {
 	}
 	p.watcher = w
 	p.cc = cc
+
+	// 强制初始的信息更新
 	// Get the initial name resolution.
 	if err := p.processUpdates(); err != nil {
 		return err

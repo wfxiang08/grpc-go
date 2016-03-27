@@ -63,12 +63,15 @@ var _ grpc.ClientConn
 
 // Client API for Greeter service
 
+// 定义了RPC Client的接口
 type GreeterClient interface {
 	// Sends a greeting
 	SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloReply, error)
 }
 
+// 实现则采用私有的类型
 type greeterClient struct {
+	// 内部管理一个Conn
 	cc *grpc.ClientConn
 }
 
@@ -77,7 +80,10 @@ func NewGreeterClient(cc *grpc.ClientConn) GreeterClient {
 }
 
 func (c *greeterClient) SayHello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloReply, error) {
+	// 准备接受数据
 	out := new(HelloReply)
+
+	// 数据格式
 	err := grpc.Invoke(ctx, "/helloworld.Greeter/SayHello", in, out, c.cc, opts...)
 	if err != nil {
 		return nil, err
@@ -97,10 +103,14 @@ func RegisterGreeterServer(s *grpc.Server, srv GreeterServer) {
 }
 
 func _Greeter_SayHello_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error) (interface{}, error) {
+	// 解码数据
+	// protobuf格式，数据压缩，加密等处理
 	in := new(HelloRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
+
+	// 调用服务器的代码
 	out, err := srv.(GreeterServer).SayHello(ctx, in)
 	if err != nil {
 		return nil, err

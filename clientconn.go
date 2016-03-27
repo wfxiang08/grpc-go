@@ -1,36 +1,3 @@
-/*
- *
- * Copyright 2014, Google Inc.
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-
 package grpc
 
 import (
@@ -49,38 +16,39 @@ import (
 )
 
 var (
-	// ErrUnspecTarget indicates that the target address is unspecified.
+// ErrUnspecTarget indicates that the target address is unspecified.
 	ErrUnspecTarget = errors.New("grpc: target is unspecified")
-	// ErrNoTransportSecurity indicates that there is no transport security
-	// being set for ClientConn. Users should either set one or explicitly
-	// call WithInsecure DialOption to disable security.
+// ErrNoTransportSecurity indicates that there is no transport security
+// being set for ClientConn. Users should either set one or explicitly
+// call WithInsecure DialOption to disable security.
 	ErrNoTransportSecurity = errors.New("grpc: no transport security set (use grpc.WithInsecure() explicitly or set credentials)")
-	// ErrCredentialsMisuse indicates that users want to transmit security information
-	// (e.g., oauth2 token) which requires secure connection on an insecure
-	// connection.
+// ErrCredentialsMisuse indicates that users want to transmit security information
+// (e.g., oauth2 token) which requires secure connection on an insecure
+// connection.
 	ErrCredentialsMisuse = errors.New("grpc: the credentials require transport level security (use grpc.WithTransportAuthenticator() to set)")
-	// ErrClientConnClosing indicates that the operation is illegal because
-	// the session is closing.
+// ErrClientConnClosing indicates that the operation is illegal because
+// the session is closing.
 	ErrClientConnClosing = errors.New("grpc: the client connection is closing")
-	// ErrClientConnTimeout indicates that the connection could not be
-	// established or re-established within the specified timeout.
+// ErrClientConnTimeout indicates that the connection could not be
+// established or re-established within the specified timeout.
 	ErrClientConnTimeout = errors.New("grpc: timed out trying to connect")
-	// minimum time to give a connection to complete
+// minimum time to give a connection to complete
 	minConnectTimeout = 20 * time.Second
 )
 
 // dialOptions configure a Dial call. dialOptions are set by the DialOption
 // values passed to Dial.
 type dialOptions struct {
-	codec    Codec
-	cp       Compressor
-	dc       Decompressor
+	codec    Codec        // 编码解码算法
+	cp       Compressor   // 压缩
+	dc       Decompressor // 解压缩
 	picker   Picker
 	block    bool
 	insecure bool
 	copts    transport.ConnectOptions
 }
 
+//----------------------------------------------------------------------------------------------------------------------
 // DialOption configures how we set up the connection.
 type DialOption func(*dialOptions)
 
@@ -168,18 +136,28 @@ func WithUserAgent(s string) DialOption {
 	}
 }
 
+// 设置不同的DialOption
+//----------------------------------------------------------------------------------------------------------------------
+
 // Dial creates a client connection the given target.
+// DialOption 是设置: ClientConn的dopts的各种方法
+//
 func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	cc := &ClientConn{
 		target: target,
 	}
+	// 1. 注意： opt的类型，它用来设置： cc.dopts中的不同属性
 	for _, opt := range opts {
 		opt(&cc.dopts)
 	}
+
+	// 2. 默认选择protobuf来进行编码和解码
 	if cc.dopts.codec == nil {
 		// Set the default codec.
 		cc.dopts.codec = protoCodec{}
 	}
+
+	// 3. 什么是Picker呢, 用于选择: Transport, 就是挑选Backend Server
 	if cc.dopts.picker == nil {
 		cc.dopts.picker = &unicastPicker{
 			target: target,
@@ -188,6 +166,9 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 	if err := cc.dopts.picker.Init(cc); err != nil {
 		return nil, err
 	}
+
+
+	// "localhost:50051" --> localhost
 	colonPos := strings.LastIndex(target, ":")
 	if colonPos == -1 {
 		colonPos = len(target)
@@ -200,15 +181,15 @@ func Dial(target string, opts ...DialOption) (*ClientConn, error) {
 type ConnectivityState int
 
 const (
-	// Idle indicates the ClientConn is idle.
+// Idle indicates the ClientConn is idle.
 	Idle ConnectivityState = iota
-	// Connecting indicates the ClienConn is connecting.
+// Connecting indicates the ClienConn is connecting.
 	Connecting
-	// Ready indicates the ClientConn is ready for work.
+// Ready indicates the ClientConn is ready for work.
 	Ready
-	// TransientFailure indicates the ClientConn has seen a failure but expects to recover.
+// TransientFailure indicates the ClientConn has seen a failure but expects to recover.
 	TransientFailure
-	// Shutdown indicates the ClientConn has started shutting down.
+// Shutdown indicates the ClientConn has started shutting down.
 	Shutdown
 )
 
@@ -254,6 +235,8 @@ func (cc *ClientConn) Close() error {
 	return cc.dopts.picker.Close()
 }
 
+// XXX: Conn包含哪些状态呢?
+//      最核心的是: transport.ClientTransport
 // Conn is a client connection to a single destination.
 type Conn struct {
 	target       string
@@ -262,13 +245,13 @@ type Conn struct {
 	shutdownChan chan struct{}
 	events       trace.EventLog
 
-	mu      sync.Mutex
-	state   ConnectivityState
-	stateCV *sync.Cond
+	mu           sync.Mutex
+	state        ConnectivityState
+	stateCV      *sync.Cond
 	// ready is closed and becomes nil when a new transport is up or failed
 	// due to timeout.
-	ready     chan struct{}
-	transport transport.ClientTransport
+	ready        chan struct{}
+	transport    transport.ClientTransport
 }
 
 // NewConn creates a Conn.
@@ -285,6 +268,7 @@ func NewConn(cc *ClientConn) (*Conn, error) {
 	if EnableTracing {
 		c.events = trace.NewEventLog("grpc.ClientConn", c.target)
 	}
+
 	if !c.dopts.insecure {
 		var ok bool
 		for _, cd := range c.dopts.copts.AuthOptions {
@@ -450,7 +434,7 @@ func (cc *Conn) resetTransport(closeTransport bool) error {
 				sleepTime = 0
 			}
 			// Fail early before falling into sleep.
-			if cc.dopts.copts.Timeout > 0 && cc.dopts.copts.Timeout < sleepTime+time.Since(start) {
+			if cc.dopts.copts.Timeout > 0 && cc.dopts.copts.Timeout < sleepTime + time.Since(start) {
 				cc.mu.Lock()
 				cc.errorf("connection timeout")
 				cc.mu.Unlock()
@@ -521,40 +505,44 @@ func (cc *Conn) transportMonitor() {
 			if !cc.reconnect() {
 				return
 			}
-			// Tries to drain reset signal if there is any since it is out-dated.
-			select {
-			case <-cc.resetChan:
-			default:
-			}
+		// Tries to drain reset signal if there is any since it is out-dated.
+				select {
+				case <-cc.resetChan:
+				default:
+				}
 		}
 	}
 }
 
 // Wait blocks until i) the new transport is up or ii) ctx is done or iii) cc is closed.
 func (cc *Conn) Wait(ctx context.Context) (transport.ClientTransport, error) {
+	// 等待？ 为什么等待呢?
 	for {
 		cc.mu.Lock()
 		switch {
+		// 1. 如果Conn关闭，则直接报错
 		case cc.state == Shutdown:
 			cc.mu.Unlock()
 			return nil, ErrClientConnClosing
+		// 2. 如果Ready, 则返回: Transport
 		case cc.state == Ready:
 			ct := cc.transport
 			cc.mu.Unlock()
 			return ct, nil
 		default:
+			// 3. 其他情况下，等待Ready or Done
 			ready := cc.ready
 			if ready == nil {
 				ready = make(chan struct{})
 				cc.ready = ready
 			}
 			cc.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, transport.ContextErr(ctx.Err())
-			// Wait until the new transport is ready or failed.
-			case <-ready:
-			}
+				select {
+				case <-ctx.Done():
+					return nil, transport.ContextErr(ctx.Err())
+				// Wait until the new transport is ready or failed.
+				case <-ready:
+				}
 		}
 	}
 }

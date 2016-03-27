@@ -271,11 +271,16 @@ type framer struct {
 }
 
 func newFramer(conn net.Conn) *framer {
+	// 1. 首先: reader/writer 是对Conn做了一层buffer
 	f := &framer{
 		reader: bufio.NewReaderSize(conn, http2IOBufSize),
 		writer: bufio.NewWriterSize(conn, http2IOBufSize),
 	}
+
+	// 2. fr: 在buffer的基础上在做了http2的处理
 	f.fr = http2.NewFramer(f.writer, f.reader)
+
+	// 3.
 	f.fr.ReadMetaHeaders = hpack.NewDecoder(http2InitHeaderTableSize, nil)
 	return f
 }

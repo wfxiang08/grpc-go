@@ -59,6 +59,11 @@ import (
 
 type methodHandler func(srv interface{}, ctx context.Context, dec func(interface{}) error) (interface{}, error)
 
+// 1. 基本元素:
+//            方法描述
+//            流描述
+//            服务描述
+//
 // MethodDesc represents an RPC service's method specification.
 type MethodDesc struct {
 	MethodName string
@@ -77,6 +82,7 @@ type ServiceDesc struct {
 
 // service consists of the information of the server serving this service and
 // the methods in this service.
+// 2. 服务: service
 type service struct {
 	server interface{} // the server for service methods
 	md     map[string]*MethodDesc
@@ -84,6 +90,7 @@ type service struct {
 }
 
 // Server is a gRPC server to serve RPC requests.
+// 3. Server 将多个服务聚合在一起，对外提供服务?
 type Server struct {
 	opts   options
 
@@ -104,6 +111,8 @@ type options struct {
 	useHandlerImpl       bool // use http.Handler-based server
 }
 
+// 4. 通过ServerOption来设置 Server Side的options
+//----------------------------------------------------------------------------------------------------------------------
 // A ServerOption sets options.
 type ServerOption func(*options)
 
@@ -140,20 +149,24 @@ func Creds(c credentials.Credentials) ServerOption {
 		o.creds = c
 	}
 }
+//----------------------------------------------------------------------------------------------------------------------
 
 // NewServer creates a gRPC server which has no service registered and has not
 // started to accept requests yet.
 func NewServer(opt ...ServerOption) *Server {
+	// 1. 调用各种 options
 	var opts options
 	for _, o := range opt {
 		o(&opts)
 	}
+
+	// 2. 设置codec, 默认为protobuf
 	if opts.codec == nil {
 		// Set the default codec.
 		opts.codec = protoCodec{}
 	}
 
-	// 1. 创建一个Server, 默认情况下: lis 为空, conns为空
+	// 3. 创建一个Server, 默认情况下: lis 为空, conns为空
 	s := &Server{
 		lis:   make(map[net.Listener]bool),
 		opts:  opts,
@@ -161,7 +174,7 @@ func NewServer(opt ...ServerOption) *Server {
 		m:     make(map[string]*service),
 	}
 
-	// 2. 如何Tracing, runtime?
+	// 3.1. 如何Tracing, runtime?
 	if EnableTracing {
 		_, file, line, _ := runtime.Caller(1)
 		s.events = trace.NewEventLog("grpc.Server", fmt.Sprintf("%s:%d", file, line))
@@ -219,6 +232,7 @@ func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 	// server: 具体的Handler
 	// md: Method Description
 	// sd: Stream description
+	// 1. 创建一个service
 	srv := &service{
 		server: ss,
 		md:     make(map[string]*MethodDesc),
@@ -233,7 +247,7 @@ func (s *Server) register(sd *ServiceDesc, ss interface{}) {
 		srv.sd[d.StreamName] = d
 	}
 
-	// 注册服务
+	// 2. 注册服务
 	s.m[sd.ServiceName] = srv
 }
 
@@ -244,12 +258,13 @@ var (
 )
 
 func (s *Server) useTransportAuthenticator(rawConn net.Conn) (net.Conn, credentials.AuthInfo, error) {
+	// 1. 获取creds
 	creds, ok := s.opts.creds.(credentials.TransportAuthenticator)
 	if !ok {
 		return rawConn, nil, nil
 	}
 
-	// https/TLS等Handshake
+	// 2. TLS Handshake
 	return creds.ServerHandshake(rawConn)
 }
 
@@ -305,6 +320,8 @@ func (s *Server) Serve(lis net.Listener) error {
 // handleRawConn is run in its own goroutine and handles a just-accepted
 // connection that has not had any I/O performed on it yet.
 func (s *Server) handleRawConn(rawConn net.Conn) {
+	// Server在每一个Connection上都都做啥了
+	// 1. 获取经过 TLS 封装的 Conn/AuthInfo等
 	conn, authInfo, err := s.useTransportAuthenticator(rawConn)
 
 	// HandShake Failed
@@ -326,6 +343,8 @@ func (s *Server) handleRawConn(rawConn net.Conn) {
 	}
 	s.mu.Unlock()
 
+
+	// 2. 对外提供服务
 	if s.opts.useHandlerImpl {
 		s.serveUsingHandler(conn)
 	} else {
@@ -339,8 +358,11 @@ func (s *Server) handleRawConn(rawConn net.Conn) {
 // This is run in its own goroutine (it does network I/O in
 // transport.NewServerTransport).
 func (s *Server) serveNewHTTP2Transport(c net.Conn, authInfo credentials.AuthInfo) {
-	// 在TCP等conn的基础上，实现了基于http2的Transport
+
+	// 1. 在TCP等conn的基础上，实现了基于http2的Transport
+	//    transport.ServerTransport 的具体实现
 	st, err := transport.NewServerTransport("http2", c, s.opts.maxConcurrentStreams, authInfo)
+
 	if err != nil {
 		s.mu.Lock()
 		s.errorf("NewServerTransport(%q) failed: %v", c.RemoteAddr(), err)
@@ -350,12 +372,13 @@ func (s *Server) serveNewHTTP2Transport(c net.Conn, authInfo credentials.AuthInf
 		return
 	}
 
-	// 添加transport
+	// 2. 添加transport, 如果Server被关闭，则返回false
 	if !s.addConn(st) {
 		st.Close()
 		return
 	}
-	// 在conn上 Server Streams
+
+	// 3. 在conn上 Server Streams(处理连续不断的请求)
 	s.serveStreams(st)
 }
 
@@ -364,10 +387,12 @@ func (s *Server) serveStreams(st transport.ServerTransport) {
 	defer st.Close()
 
 	var wg sync.WaitGroup
+	// 可以认为: 在Transport上维持一个长连接，然后接下来就处理一个个Request/Stream
 	st.HandleStreams(func(stream *transport.Stream) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// stream是不是一个个被分割的请求
 			// 将st的Stream交给s进行处理
 			s.handleStream(st, stream, s.traceInfo(st, stream))
 		}()
@@ -395,15 +420,22 @@ func (s *Server) serveUsingHandler(conn net.Conn) {
 		return
 	}
 	defer s.removeConn(conn)
+
+	// 1. 启动一个http2服务
 	h2s := &http2.Server{
 		MaxConcurrentStreams: s.opts.maxConcurrentStreams,
 	}
+
+	// 2. 通过Handler的形式来对外提供服务
+	//    func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	h2s.ServeConn(conn, &http2.ServeConnOpts{
 		Handler: s,
 	})
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	// 从: Request, Writer 获取Conn(Transport), 然后再它的基础上提供: Streams 服务
 	st, err := transport.NewServerHandlerTransport(w, r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -435,6 +467,7 @@ func (s *Server) traceInfo(st transport.ServerTransport, stream *transport.Strea
 	return trInfo
 }
 
+// 主要是检查: 是否出现 conns 为 nil的情况，也就是服务被关闭的情况
 func (s *Server) addConn(c io.Closer) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

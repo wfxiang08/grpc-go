@@ -110,6 +110,7 @@ type TLSInfo struct {
 }
 
 func (t TLSInfo) AuthType() string {
+	// 传输层安全(Transport Layer Security)
 	return "tls"
 }
 
@@ -143,6 +144,7 @@ func (timeoutError) Timeout() bool   { return true }
 func (timeoutError) Temporary() bool { return true }
 
 func (c *tlsCreds) ClientHandshake(addr string, rawConn net.Conn, timeout time.Duration) (_ net.Conn, _ AuthInfo, err error) {
+	// 1. 准备timeout的配置
 	// borrow some code from tls.DialWithDialer
 	var errChannel chan error
 	if timeout != 0 {
@@ -151,6 +153,8 @@ func (c *tlsCreds) ClientHandshake(addr string, rawConn net.Conn, timeout time.D
 			errChannel <- timeoutError{}
 		})
 	}
+
+	// 2. 获取ServerName
 	if c.config.ServerName == "" {
 		colonPos := strings.LastIndex(addr, ":")
 		if colonPos == -1 {
@@ -158,15 +162,25 @@ func (c *tlsCreds) ClientHandshake(addr string, rawConn net.Conn, timeout time.D
 		}
 		c.config.ServerName = addr[:colonPos]
 	}
+
+
+	// 3. 在RawConn的基础上封装: TLS
+	//    XXX: 似乎自己重载https, 那么就可以做主动控制DNS的解析了
 	conn := tls.Client(rawConn, &c.config)
+
+	// 4. Handshake(在TCP基础之上)
 	if timeout == 0 {
 		err = conn.Handshake()
 	} else {
+		// 异步握手
+		// errChannel: 要么timeout先发生，要么Handshake先返回结果
 		go func() {
 			errChannel <- conn.Handshake()
 		}()
 		err = <-errChannel
 	}
+
+	// 5. 返回握手之后的结果: 成功或失败
 	if err != nil {
 		rawConn.Close()
 		return nil, nil, err
@@ -204,6 +218,8 @@ func NewClientTLSFromFile(certFile, serverName string) (TransportAuthenticator, 
 	if err != nil {
 		return nil, err
 	}
+
+	// Client通过ca文件和服务器通信
 	cp := x509.NewCertPool()
 	if !cp.AppendCertsFromPEM(b) {
 		return nil, fmt.Errorf("credentials: failed to append certificates")
